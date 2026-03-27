@@ -1,7 +1,15 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter_tts/flutter_tts.dart';
+import 'package:http/http.dart' as http;
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 import '../../constants/app_colors.dart';
 import '../../constants/app_constants.dart';
+
+// ─────────────────────────────────────────────
+// 🔧 REPLACE with your Gemini API key
+const _groqApiKey =
+    'YOUR_API_KEY'; // ─────────────────────────────────────────────
 
 /// Data model for a single chat message
 class ChatMessage {
@@ -18,8 +26,7 @@ class ChatMessage {
   }) : time = time ?? DateTime.now();
 }
 
-/// Chatbot screen with rule-based Q&A and voice input.
-/// Helps users understand how to report issues and auto-suggests categories.
+/// Chatbot screen with rule-based Q&A, Gemini AI fallback, and TTS.
 class ChatbotScreen extends StatefulWidget {
   const ChatbotScreen({super.key});
 
@@ -33,13 +40,24 @@ class _ChatbotScreenState extends State<ChatbotScreen> {
   final List<ChatMessage> _messages = [];
 
   late stt.SpeechToText _speech;
+  late FlutterTts _tts;
+
   bool _isListening = false;
+  bool _isThinking = false; // Gemini loading indicator
+  int? _currentlyReadingIndex; // which bubble is being read aloud
 
   @override
   void initState() {
     super.initState();
     _speech = stt.SpeechToText();
-    // Initial greeting from bot
+    _tts = FlutterTts();
+    // In initState, add this line:
+    // _listAvailableModels();
+
+    _tts.setCompletionHandler(() {
+      if (mounted) setState(() => _currentlyReadingIndex = null);
+    });
+
     _addBotMessage(
       '👋 Hello! I\'m SmartCity Assistant.\n\nI can help you:\n'
       '• Report civic issues\n'
@@ -53,30 +71,24 @@ class _ChatbotScreenState extends State<ChatbotScreen> {
   void dispose() {
     _textController.dispose();
     _scrollController.dispose();
+    _tts.stop();
     super.dispose();
   }
 
-  /// Add a message from the user
   void _addUserMessage(String text) {
-    setState(() {
-      _messages.add(ChatMessage(text: text, isUser: true));
-    });
+    setState(() => _messages.add(ChatMessage(text: text, isUser: true)));
     _scrollToBottom();
   }
 
-  /// Add a response from the bot
   void _addBotMessage(String text, {String? suggestedCategory}) {
-    setState(() {
-      _messages.add(ChatMessage(
-        text: text,
-        isUser: false,
-        suggestedCategory: suggestedCategory,
-      ));
-    });
+    setState(() => _messages.add(ChatMessage(
+          text: text,
+          isUser: false,
+          suggestedCategory: suggestedCategory,
+        )));
     _scrollToBottom();
   }
 
-  /// Scroll chat to bottom after new messages
   void _scrollToBottom() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_scrollController.hasClients) {
@@ -89,18 +101,85 @@ class _ChatbotScreenState extends State<ChatbotScreen> {
     });
   }
 
-  /// Process user input and generate bot response using keyword matching
-  void _processMessage(String input) {
+  // ── TTS ────────────────────────────────────
+  Future<void> _speak(String text, int index) async {
+    if (_currentlyReadingIndex == index) {
+      // Already reading this bubble → stop
+      await _tts.stop();
+      setState(() => _currentlyReadingIndex = null);
+      return;
+    }
+    await _tts.stop();
+    setState(() => _currentlyReadingIndex = index);
+    await _tts.setLanguage('en-IN');
+    await _tts.setSpeechRate(0.5);
+    await _tts.speak(text);
+  }
+
+// Add this method to _ChatbotScreenState
+  // Future<void> _listAvailableModels() async {
+  //   final response = await http.get(Uri.parse(
+  //       'https://generativelanguage.googleapis.com/v1beta/models?key=$_geminiApiKey'));
+  //   debugPrint('Available models: ${response.body}');
+  // }
+
+  // ── Gemini API call ─────────────────────────
+  // Replace entire _askGemini method with:
+  // Replace entire _askHuggingFace method with:
+  Future<String> _askGroq(String userMessage) async {
+    const url = 'https://api.groq.com/openai/v1/chat/completions';
+
+    final body = jsonEncode({
+      'model': 'llama-3.3-70b-versatile',
+      'messages': [
+        {
+          'role': 'system',
+          'content':
+              'You are SmartCity Assistant for Indian cities. Help users report civic issues like potholes, garbage, water leaks, electricity problems. Keep answers short, friendly, max 2-3 sentences.'
+        },
+        {'role': 'user', 'content': userMessage}
+      ],
+      'max_tokens': 150,
+      'temperature': 0.7,
+    });
+
+    try {
+      final response = await http
+          .post(
+            Uri.parse(url),
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': 'Bearer $_groqApiKey',
+            },
+            body: body,
+          )
+          .timeout(const Duration(seconds: 15));
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        final text = data['choices']?[0]?['message']?['content'] as String?;
+        return text?.trim() ?? 'Could not understand. Please try again.';
+      } else {
+        debugPrint('Groq error ${response.statusCode}: ${response.body}');
+        return 'AI service unavailable. Please try again.';
+      }
+    } catch (e) {
+      debugPrint('Groq exception: $e');
+      return 'Connection error. Check your internet.';
+    }
+  }
+
+  // ── Message processing ──────────────────────
+  Future<void> _processMessage(String input) async {
     if (input.trim().isEmpty) return;
 
     final text = input.trim();
     _addUserMessage(text);
     _textController.clear();
 
-    // Find matching Q&A from predefined list
+    // 1. Try rule-based match first
     final lower = text.toLowerCase();
     Map<String, String>? matched;
-
     for (final qa in AppConstants.chatbotQA) {
       final triggers = qa['trigger']!.split('|');
       if (triggers.any((t) => lower.contains(t))) {
@@ -109,47 +188,46 @@ class _ChatbotScreenState extends State<ChatbotScreen> {
       }
     }
 
-    // Simulate typing delay
-    Future.delayed(const Duration(milliseconds: 800), () {
-      if (matched != null) {
-        _addBotMessage(
-          matched['response']!,
-          suggestedCategory: matched['category'],
-        );
-      } else {
-        // Generic fallback response
-        _addBotMessage(
-          'I understand you have a civic issue. Could you describe it more? '
-          'For example: "garbage not collected", "water pipe leak", "road pothole", etc.\n\n'
-          'Or you can tap the "+" button on home to directly report an issue.',
-        );
-      }
-    });
+    if (matched != null) {
+      await Future.delayed(const Duration(milliseconds: 600));
+      _addBotMessage(matched['response']!,
+          suggestedCategory: matched['category']);
+      return;
+    }
+
+    // 2. Fallback → Gemini
+    setState(() => _isThinking = true);
+    _scrollToBottom();
+
+    final geminiReply = await _askGroq(text);
+
+    setState(() => _isThinking = false);
+    _addBotMessage(geminiReply);
   }
 
-  /// Toggle voice input
+  // ── Voice ───────────────────────────────────
   Future<void> _toggleVoice() async {
     if (_isListening) {
       await _speech.stop();
       setState(() => _isListening = false);
-    } else {
-      bool available = await _speech.initialize(
-        onError: (_) => setState(() => _isListening = false),
+      return;
+    }
+    final available = await _speech.initialize(
+      onError: (_) => setState(() => _isListening = false),
+    );
+    if (available) {
+      setState(() => _isListening = true);
+      _speech.listen(
+        onResult: (result) {
+          _textController.text = result.recognizedWords;
+          if (result.finalResult) {
+            _processMessage(result.recognizedWords);
+            setState(() => _isListening = false);
+          }
+        },
+        listenFor: const Duration(seconds: 30),
+        pauseFor: const Duration(seconds: 3),
       );
-      if (available) {
-        setState(() => _isListening = true);
-        _speech.listen(
-          onResult: (result) {
-            _textController.text = result.recognizedWords;
-            if (result.finalResult) {
-              _processMessage(result.recognizedWords);
-              setState(() => _isListening = false);
-            }
-          },
-          listenFor: const Duration(seconds: 30),
-          pauseFor: const Duration(seconds: 3),
-        );
-      }
     }
   }
 
@@ -180,25 +258,27 @@ class _ChatbotScreenState extends State<ChatbotScreen> {
       ),
       body: Column(
         children: [
-          // Quick suggestion chips
           _QuickSuggestions(onSelect: _processMessage),
-
-          // Chat messages list
           Expanded(
             child: ListView.builder(
               controller: _scrollController,
               padding: const EdgeInsets.all(16),
-              itemCount: _messages.length,
-              itemBuilder: (ctx, i) => _ChatBubble(
-                message: _messages[i],
-                onCategoryUse: (cat) {
-                  Navigator.pushNamed(context, '/report');
-                },
-              ),
+              itemCount: _messages.length + (_isThinking ? 1 : 0),
+              itemBuilder: (ctx, i) {
+                // Typing indicator at end
+                if (_isThinking && i == _messages.length) {
+                  return const _TypingIndicator();
+                }
+                return _ChatBubble(
+                  message: _messages[i],
+                  index: i,
+                  isReading: _currentlyReadingIndex == i,
+                  onCategoryUse: (_) => Navigator.pushNamed(context, '/report'),
+                  onReadToggle: () => _speak(_messages[i].text, i),
+                );
+              },
             ),
           ),
-
-          // Input area
           _ChatInput(
             controller: _textController,
             isListening: _isListening,
@@ -211,21 +291,23 @@ class _ChatbotScreenState extends State<ChatbotScreen> {
   }
 }
 
-/// Quick suggestion buttons at top of chatbot
+// ────────────────────────────────────────────────────────
+// WIDGETS
+// ────────────────────────────────────────────────────────
+
 class _QuickSuggestions extends StatelessWidget {
   final Function(String) onSelect;
   const _QuickSuggestions({required this.onSelect});
 
   @override
   Widget build(BuildContext context) {
-    final suggestions = [
+    const suggestions = [
       'How to report?',
       'Garbage issue',
       'Water leak',
       'Road pothole',
       'Emergency!',
     ];
-
     return Container(
       color: Colors.white,
       padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
@@ -250,12 +332,106 @@ class _QuickSuggestions extends StatelessWidget {
   }
 }
 
-/// Individual chat bubble
+/// Animated "..." typing indicator shown while Gemini is thinking
+class _TypingIndicator extends StatefulWidget {
+  const _TypingIndicator();
+
+  @override
+  State<_TypingIndicator> createState() => _TypingIndicatorState();
+}
+
+class _TypingIndicatorState extends State<_TypingIndicator>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _ctrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 900),
+    )..repeat();
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12, right: 60),
+      child: Row(
+        children: [
+          const CircleAvatar(
+            radius: 16,
+            backgroundColor: AppColors.primary,
+            child: Text('🤖', style: TextStyle(fontSize: 14)),
+          ),
+          const SizedBox(width: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: const BorderRadius.only(
+                topLeft: Radius.circular(16),
+                topRight: Radius.circular(16),
+                bottomRight: Radius.circular(16),
+                bottomLeft: Radius.circular(4),
+              ),
+              boxShadow: [
+                BoxShadow(
+                    color: Colors.black.withOpacity(0.08),
+                    blurRadius: 4,
+                    offset: const Offset(0, 2))
+              ],
+            ),
+            child: AnimatedBuilder(
+              animation: _ctrl,
+              builder: (_, __) {
+                final step = (_ctrl.value * 3).floor();
+                return Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: List.generate(3, (i) {
+                    return Container(
+                      margin: const EdgeInsets.symmetric(horizontal: 2),
+                      width: 7,
+                      height: 7,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: i == step
+                            ? AppColors.primary
+                            : AppColors.primary.withOpacity(0.3),
+                      ),
+                    );
+                  }),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Individual chat bubble with read-aloud toggle
 class _ChatBubble extends StatelessWidget {
   final ChatMessage message;
+  final int index;
+  final bool isReading;
   final Function(String) onCategoryUse;
+  final VoidCallback onReadToggle;
 
-  const _ChatBubble({required this.message, required this.onCategoryUse});
+  const _ChatBubble({
+    required this.message,
+    required this.index,
+    required this.isReading,
+    required this.onCategoryUse,
+    required this.onReadToggle,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -313,6 +489,37 @@ class _ChatBubble extends StatelessWidget {
                     ),
                   ),
                 ),
+
+                // ── Read aloud button (bot messages only) ──
+                if (!isUser) ...[
+                  const SizedBox(height: 4),
+                  GestureDetector(
+                    onTap: onReadToggle,
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          isReading ? Icons.stop_circle : Icons.volume_up,
+                          size: 15,
+                          color: isReading
+                              ? Colors.red
+                              : AppColors.primary.withOpacity(0.7),
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          isReading ? 'Stop reading' : 'Read aloud',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: isReading
+                                ? Colors.red
+                                : AppColors.primary.withOpacity(0.7),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+
                 // Category suggestion button
                 if (message.suggestedCategory != null) ...[
                   const SizedBox(height: 6),
@@ -324,9 +531,7 @@ class _ChatBubble extends StatelessWidget {
                       backgroundColor: AppColors.accent,
                       foregroundColor: Colors.white,
                       padding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 6,
-                      ),
+                          horizontal: 12, vertical: 6),
                       textStyle: const TextStyle(fontSize: 12),
                     ),
                   ),
@@ -365,7 +570,6 @@ class _ChatInput extends StatelessWidget {
       ),
       child: Row(
         children: [
-          // Voice input button
           GestureDetector(
             onTap: onVoice,
             child: AnimatedContainer(
@@ -384,7 +588,6 @@ class _ChatInput extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 8),
-          // Text input
           Expanded(
             child: TextField(
               controller: controller,
@@ -396,16 +599,13 @@ class _ChatInput extends StatelessWidget {
                   borderRadius: BorderRadius.circular(24),
                   borderSide: BorderSide.none,
                 ),
-                contentPadding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 10,
-                ),
+                contentPadding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
               ),
               onSubmitted: onSend,
             ),
           ),
           const SizedBox(width: 8),
-          // Send button
           GestureDetector(
             onTap: () => onSend(controller.text),
             child: Container(

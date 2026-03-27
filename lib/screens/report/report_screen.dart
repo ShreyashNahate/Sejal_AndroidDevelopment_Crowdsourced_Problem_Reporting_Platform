@@ -174,6 +174,19 @@ class _ReportScreenState extends State<ReportScreen> {
       return;
     }
 
+// Add this before setState(() => _isSubmitting = true):
+    final desc = _descController.text.trim();
+    if (desc.length < 10) {
+      _showError('Description too short. Please describe the issue properly.');
+      return;
+    }
+
+// Check for ALL same characters (e.g. "aaaaaaaaaa")
+    final allSame = desc.split('').every((c) => c == desc[0]);
+    if (allSame) {
+      _showError('Please enter a valid description.');
+      return;
+    }
     setState(() => _isSubmitting = true);
 
     final auth = context.read<AuthService>();

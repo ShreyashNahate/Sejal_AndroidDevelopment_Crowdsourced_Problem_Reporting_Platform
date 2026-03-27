@@ -1,16 +1,13 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:uuid/uuid.dart';
 import '../models/issue_model.dart';
 import '../models/vote_model.dart';
 import '../constants/app_constants.dart';
-// Add this import at the top of issue_service.dart
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 /// Service for all issue-related Firebase operations.
-/// Handles: create, read, vote, priority calculation, duplicate detection.
 class IssueService extends ChangeNotifier {
   final FirebaseFirestore _db = FirebaseFirestore.instance;
 
@@ -41,7 +38,6 @@ class IssueService extends ChangeNotifier {
           .map((doc) => IssueModel.fromMap(doc.data(), doc.id))
           .toList();
 
-      // Separate emergency issues
       _emergencyIssues = _issues.where((i) => i.isEmergency).toList();
     } catch (e) {
       _error = 'Failed to load issues: $e';
@@ -63,23 +59,19 @@ class IssueService extends ChangeNotifier {
             .toList());
   }
 
-  /// Upload image to Cloudinary (free tier) and return the secure URL.
-  /// Cloudinary free tier: 25GB storage + 25GB bandwidth/month.
-  /// Setup: cloudinary.com → Settings → Upload Presets → create unsigned preset
+  /// Upload image to Cloudinary
   Future<String?> uploadImage(File imageFile) async {
     try {
-      // 🔧 REPLACE these two values with yours from Cloudinary dashboard
-      const cloudName = 'dqbsprma5'; // e.g. 'dxyz123abc'
-      const uploadPreset = 'SmartCity'; // e.g. 'smartcity_unsigned'
+      const cloudName = 'dqbsprma5';
+      const uploadPreset = 'SmartCity';
 
       final url = Uri.parse(
         'https://api.cloudinary.com/v1_1/$cloudName/image/upload',
       );
 
-      // Multipart POST request — no API key needed for unsigned preset
       final request = http.MultipartRequest('POST', url)
         ..fields['upload_preset'] = uploadPreset
-        ..fields['folder'] = 'smartcity_issues' // organizes uploads in a folder
+        ..fields['folder'] = 'smartcity_issues'
         ..files.add(
           await http.MultipartFile.fromPath('file', imageFile.path),
         );
@@ -89,7 +81,6 @@ class IssueService extends ChangeNotifier {
       if (response.statusCode == 200) {
         final body = await response.stream.bytesToString();
         final json = jsonDecode(body) as Map<String, dynamic>;
-        // Returns HTTPS URL — store this in Firestore
         return json['secure_url'] as String?;
       } else {
         debugPrint('Cloudinary upload failed: ${response.statusCode}');
@@ -101,52 +92,141 @@ class IssueService extends ChangeNotifier {
     }
   }
 
-  /// Check for duplicate: same location (within ~100m) + same category within 24h
-  Future<bool> isDuplicate({
+  /// All spam/fraud/duplicate checks in one place.
+  /// Fetches user's issues ONCE and does all checks in Dart — no compound queries.
+  /// Returns error string if blocked, null if clean.
+  Future<String?> _runAllChecks({
+    required String userId,
+    required String description,
     required double latitude,
     required double longitude,
     required String category,
   }) async {
-    try {
-      final yesterday = DateTime.now().subtract(const Duration(hours: 24));
+    // ── 1. Client-side description checks (no Firestore needed) ──
+    final desc = description.trim();
 
-      final snapshot = await _db
-          .collection('issues')
-          .where('category', isEqualTo: category)
-          .where('created_at', isGreaterThan: yesterday.millisecondsSinceEpoch)
-          .get();
-
-      for (final doc in snapshot.docs) {
-        final data = doc.data();
-        final lat = (data['latitude'] as num).toDouble();
-        final lng = (data['longitude'] as num).toDouble();
-
-        // Rough distance check (~111m per 0.001 degree)
-        final latDiff = (lat - latitude).abs();
-        final lngDiff = (lng - longitude).abs();
-        if (latDiff < 0.001 && lngDiff < 0.001) {
-          return true; // Duplicate found
-        }
-      }
-    } catch (e) {
-      debugPrint('Duplicate check error: $e');
+    if (desc.length < 10) {
+      return 'Description too short. Please describe the issue properly.';
     }
-    return false;
-  }
 
-  /// Check how many issues user submitted in last hour (spam prevention)
-  Future<int> getUserSubmissionsLastHour(String userId) async {
+    final allSameChar = desc.split('').every((c) => c == desc[0]);
+    if (allSameChar) {
+      return 'Please enter a valid description.';
+    }
+
+    // ── 2. Fetch ALL issues by this user (single query, no index needed) ──
+    List<Map<String, dynamic>> userIssues = [];
     try {
-      final oneHourAgo = DateTime.now().subtract(const Duration(hours: 1));
-      final snapshot = await _db
+      final snap = await _db
           .collection('issues')
           .where('user_id', isEqualTo: userId)
-          .where('created_at', isGreaterThan: oneHourAgo.millisecondsSinceEpoch)
           .get();
-      return snapshot.docs.length;
+      userIssues = snap.docs.map((d) => d.data()).toList();
     } catch (e) {
-      return 0;
+      debugPrint('User issues fetch error: $e');
     }
+
+    final now = DateTime.now();
+    final twoMinsAgo = now.subtract(const Duration(minutes: 2));
+    final oneHourAgo = now.subtract(const Duration(hours: 1));
+    final oneDayAgo = now.subtract(const Duration(hours: 24));
+
+    // ── 3. Cooldown: no submission in last 2 minutes ──
+    final onCooldown = userIssues.any((d) {
+      final ts = d['created_at'] as int?;
+      if (ts == null) return false;
+      return DateTime.fromMillisecondsSinceEpoch(ts).isAfter(twoMinsAgo);
+    });
+    if (onCooldown) {
+      return 'Please wait 2 minutes before submitting another report.';
+    }
+
+    // ── 4. Hourly limit: max 5 per hour ──
+    final hourlyCount = userIssues.where((d) {
+      final ts = d['created_at'] as int?;
+      if (ts == null) return false;
+      return DateTime.fromMillisecondsSinceEpoch(ts).isAfter(oneHourAgo);
+    }).length;
+    if (hourlyCount >= 5) {
+      return 'You have submitted too many reports in the last hour. Please wait.';
+    }
+
+    // ── 5. Daily limit: max 10 per day ──
+    final dailyCount = userIssues.where((d) {
+      final ts = d['created_at'] as int?;
+      if (ts == null) return false;
+      return DateTime.fromMillisecondsSinceEpoch(ts).isAfter(oneDayAgo);
+    }).length;
+    if (dailyCount >= 10) {
+      return 'You have exceeded your daily report limit (10 per day).';
+    }
+
+    // ── 6. Same user, same category within 500m in last 24h ──
+    final sameUserDup = userIssues.any((d) {
+      final ts = d['created_at'] as int?;
+      if (ts == null) return false;
+      if (!DateTime.fromMillisecondsSinceEpoch(ts).isAfter(oneDayAgo)) {
+        return false;
+      }
+      if (d['category'] != category) return false;
+      final lat = (d['latitude'] as num?)?.toDouble();
+      final lng = (d['longitude'] as num?)?.toDouble();
+      if (lat == null || lng == null) return false;
+      return (lat - latitude).abs() < 0.005 && (lng - longitude).abs() < 0.005;
+    });
+    if (sameUserDup) {
+      return 'You already reported a $category issue near this location recently.';
+    }
+
+    // ── 7. Duplicate description check (anyone, last 24h) ──
+    try {
+      final descSnap = await _db
+          .collection('issues')
+          .where('description', isEqualTo: desc)
+          .get();
+
+      final descDup = descSnap.docs.any((doc) {
+        final ts = doc.data()['created_at'] as int?;
+        if (ts == null) return false;
+        return DateTime.fromMillisecondsSinceEpoch(ts).isAfter(oneDayAgo);
+      });
+
+      if (descDup) {
+        return 'This exact issue description was already submitted recently.';
+      }
+    } catch (e) {
+      debugPrint('Desc dup check error: $e');
+    }
+
+    // ── 8. Location duplicate: same category, same spot (~50m), last 24h ──
+    try {
+      final locSnap = await _db
+          .collection('issues')
+          .where('category', isEqualTo: category)
+          .get();
+
+      final locDup = locSnap.docs.any((doc) {
+        final data = doc.data();
+        final ts = data['created_at'] as int?;
+        if (ts == null) return false;
+        if (!DateTime.fromMillisecondsSinceEpoch(ts).isAfter(oneDayAgo)) {
+          return false;
+        }
+        final lat = (data['latitude'] as num?)?.toDouble();
+        final lng = (data['longitude'] as num?)?.toDouble();
+        if (lat == null || lng == null) return false;
+        return (lat - latitude).abs() < 0.0005 &&
+            (lng - longitude).abs() < 0.0005;
+      });
+
+      if (locDup) {
+        return 'A similar issue has already been reported at this location recently.';
+      }
+    } catch (e) {
+      debugPrint('Location dup check error: $e');
+    }
+
+    return null; // ✅ All checks passed
   }
 
   /// Submit a new issue to Firestore
@@ -163,41 +243,44 @@ class IssueService extends ChangeNotifier {
     required String city,
   }) async {
     try {
-      // Image is mandatory for real complaints
+      // ── Image check ──
       if (imageFile == null) {
         return 'Please attach an image of the issue.';
       }
 
-      // Spam check: max 5 submissions per hour
+      // ── Run all fraud/spam/duplicate checks (skip for anonymous) ──
       if (!isAnonymous) {
-        final count = await getUserSubmissionsLastHour(userId);
-        if (count >= 5) {
-          return 'You have submitted too many reports in the last hour. Please wait.';
+        final blockReason = await _runAllChecks(
+          userId: userId,
+          description: description,
+          latitude: latitude,
+          longitude: longitude,
+          category: category,
+        );
+        if (blockReason != null) {
+          // Log to fraud_reports for admin review
+          _db.collection('fraud_reports').add({
+            'user_id': userId,
+            'reason': blockReason,
+            'description': description,
+            'latitude': latitude,
+            'longitude': longitude,
+            'created_at': DateTime.now().millisecondsSinceEpoch,
+          }).catchError((_) {});
+          return blockReason;
         }
       }
 
-      // Duplicate check
-      final isDup = await isDuplicate(
-        latitude: latitude,
-        longitude: longitude,
-        category: category,
-      );
-      if (isDup) {
-        return 'A similar issue has already been reported at this location recently.';
-      }
-
-      // Upload image
+      // ── Upload image ──
       final imageUrl = await uploadImage(imageFile);
       if (imageUrl == null) {
         return 'Failed to upload image. Check internet connection.';
       }
 
-      // Calculate initial priority score
-      // Base = 1.0, Emergency adds 50 bonus points
+      // ── Save issue to Firestore ──
       final priorityScore = isEmergency ? AppConstants.emergencyBoost : 1.0;
-
-      // Create the issue document
       final issueRef = _db.collection('issues').doc();
+
       final issue = IssueModel(
         id: issueRef.id,
         imageUrl: imageUrl,
@@ -218,7 +301,7 @@ class IssueService extends ChangeNotifier {
 
       await issueRef.set(issue.toMap());
 
-      // Update user's issue count (skip for anonymous)
+      // ── Update user stats ──
       if (!isAnonymous) {
         await _db.collection('users').doc(userId).set(
           {'issues_reported': FieldValue.increment(1)},
@@ -226,13 +309,13 @@ class IssueService extends ChangeNotifier {
         );
       }
 
-      // Update city stats
+      // ── Update city stats ──
       await _db.collection('city_stats').doc(city).set(
         {'issue_count': FieldValue.increment(1), 'city': city},
         SetOptions(merge: true),
       );
 
-      return null; // null = success
+      return null; // ✅ Success
     } catch (e) {
       debugPrint('Submit issue error: $e');
       return 'An error occurred. Please try again.';
@@ -246,21 +329,16 @@ class IssueService extends ChangeNotifier {
     required double trustScore,
   }) async {
     try {
-      // Check if user already voted on this issue
       final existingVote = await _db
           .collection('votes')
           .where('issue_id', isEqualTo: issueId)
           .where('user_id', isEqualTo: userId)
           .get();
 
-      if (existingVote.docs.isNotEmpty) {
-        return false; // Already voted
-      }
+      if (existingVote.docs.isNotEmpty) return false;
 
-      // Calculate vote weight from trust score
       final weight = trustScore.clamp(0.5, 3.0);
 
-      // Add vote record
       await _db.collection('votes').add({
         'issue_id': issueId,
         'user_id': userId,
@@ -268,15 +346,11 @@ class IssueService extends ChangeNotifier {
         'created_at': DateTime.now().millisecondsSinceEpoch,
       });
 
-      // Update issue priority score and vote count
-      // Priority = sum of all vote weights + emergency boost
-      final issueRef = _db.collection('issues').doc(issueId);
-      await issueRef.update({
+      await _db.collection('issues').doc(issueId).update({
         'priority_score': FieldValue.increment(weight),
         'vote_count': FieldValue.increment(1),
       });
 
-      // Increase voter's trust score slightly (reward participation)
       await _db.collection('users').doc(userId).set(
         {
           'trust_score': FieldValue.increment(0.01),
@@ -294,7 +368,18 @@ class IssueService extends ChangeNotifier {
 
   /// Update issue status (admin function)
   Future<void> updateStatus(String issueId, String status) async {
+    final doc = await _db.collection('issues').doc(issueId).get();
+    final city = doc.data()?['city'] as String?;
+
     await _db.collection('issues').doc(issueId).update({'status': status});
+
+    if (status == 'resolved' && city != null) {
+      await _db.collection('city_stats').doc(city).set(
+        {'resolved': FieldValue.increment(1)},
+        SetOptions(merge: true),
+      );
+    }
+
     await fetchIssues();
   }
 
@@ -308,6 +393,7 @@ class IssueService extends ChangeNotifier {
       return snapshot.docs.map((doc) {
         final data = doc.data();
         data['id'] = doc.id;
+        data['resolved'] = data['resolved'] ?? 0;
         return data;
       }).toList();
     } catch (e) {
