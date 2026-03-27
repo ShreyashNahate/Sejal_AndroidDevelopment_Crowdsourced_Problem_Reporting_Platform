@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "363011610332",
+    "project_id": "smartcity-dbf79",
+    "storage_bucket": "smartcity-dbf79.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:363011610332:android:6102a27a26740f53ebc619",
+        "android_client_info": {
+          "package_name": "com.example.smartcity"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCMPGMc8v09nrK5VcjAcrrVdYppEuQ3ucU"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
