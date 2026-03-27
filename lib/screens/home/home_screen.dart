@@ -110,6 +110,11 @@ class _HomeTab extends StatelessWidget {
       appBar: AppBar(
         title: const Text('🏙️ SmartCity'),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.account_circle),
+            onPressed: () => Navigator.pushNamed(context, '/profile'),
+            tooltip: 'My Profile',
+          ),
           // Emergency button in top bar
           IconButton(
             icon: const Icon(Icons.emergency, color: AppColors.emergency),

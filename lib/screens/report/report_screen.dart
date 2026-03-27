@@ -4,14 +4,15 @@ import 'package:provider/provider.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 import 'package:geolocator/geolocator.dart';
+import 'package:latlong2/latlong.dart';
 import '../../constants/app_colors.dart';
 import '../../constants/app_constants.dart';
 import '../../services/auth_service.dart';
 import '../../services/issue_service.dart';
 import '../../services/location_service.dart';
+import '../map/location_picker_screen.dart'; // ← new screen
 
 /// Screen for reporting a new civic issue.
-/// Supports: camera, GPS, voice input, category selection, anonymous mode, emergency flag.
 class ReportScreen extends StatefulWidget {
   const ReportScreen({super.key});
 
@@ -24,11 +25,9 @@ class _ReportScreenState extends State<ReportScreen> {
   final _descController = TextEditingController();
   final _picker = ImagePicker();
 
-  // Voice input
   late stt.SpeechToText _speech;
   bool _isListening = false;
 
-  // Form state
   File? _imageFile;
   Position? _position;
   String _selectedCategory = 'garbage';
@@ -39,11 +38,14 @@ class _ReportScreenState extends State<ReportScreen> {
   String? _address;
   String _city = 'Unknown';
 
+  // Track if location was manually picked (vs GPS)
+  bool _isManualLocation = false;
+
   @override
   void initState() {
     super.initState();
     _speech = stt.SpeechToText();
-    _getLocation();
+    _getLocation(); // auto-fetch GPS on open
   }
 
   @override
@@ -52,9 +54,12 @@ class _ReportScreenState extends State<ReportScreen> {
     super.dispose();
   }
 
-  /// Fetch GPS location automatically on screen open
+  /// Auto GPS fetch
   Future<void> _getLocation() async {
-    setState(() => _isLoadingLocation = true);
+    setState(() {
+      _isLoadingLocation = true;
+      _isManualLocation = false;
+    });
 
     final position = await LocationService.getCurrentPosition();
     if (position != null) {
@@ -76,31 +81,51 @@ class _ReportScreenState extends State<ReportScreen> {
     setState(() => _isLoadingLocation = false);
   }
 
-  /// Open camera to capture issue photo
+  /// Open map picker — user taps to pin location manually
+  Future<void> _pickLocationOnMap() async {
+    // Pass current GPS position as initial map center (if available)
+    final initialLatLng = _position != null
+        ? LatLng(_position!.latitude, _position!.longitude)
+        : null;
+
+    final result = await Navigator.push<PickedLocation>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => LocationPickerScreen(initialPosition: initialLatLng),
+      ),
+    );
+
+    // If user confirmed a location, update state
+    if (result != null && mounted) {
+      setState(() {
+        // Convert PickedLocation into a fake Position-compatible state
+        _address = result.address;
+        _city = result.city;
+        _isManualLocation = true;
+        // Store as a simple lat/lng holder using _ManualPosition
+        _position = _ManualPosition(result.latitude, result.longitude);
+      });
+    }
+  }
+
   Future<void> _takePhoto() async {
     final XFile? photo = await _picker.pickImage(
       source: ImageSource.camera,
       imageQuality: 70,
       maxWidth: 1024,
     );
-    if (photo != null) {
-      setState(() => _imageFile = File(photo.path));
-    }
+    if (photo != null) setState(() => _imageFile = File(photo.path));
   }
 
-  /// Pick from gallery as alternative
   Future<void> _pickFromGallery() async {
     final XFile? photo = await _picker.pickImage(
       source: ImageSource.gallery,
       imageQuality: 70,
       maxWidth: 1024,
     );
-    if (photo != null) {
-      setState(() => _imageFile = File(photo.path));
-    }
+    if (photo != null) setState(() => _imageFile = File(photo.path));
   }
 
-  /// Start/stop voice input using speech_to_text
   Future<void> _toggleVoice() async {
     if (_isListening) {
       await _speech.stop();
@@ -113,9 +138,7 @@ class _ReportScreenState extends State<ReportScreen> {
         setState(() => _isListening = true);
         _speech.listen(
           onResult: (result) {
-            // Set recognized text in description field
             _descController.text = result.recognizedWords;
-            // Auto-detect category from speech
             _detectCategoryFromText(result.recognizedWords);
           },
           listenFor: const Duration(seconds: 30),
@@ -127,7 +150,6 @@ class _ReportScreenState extends State<ReportScreen> {
     }
   }
 
-  /// Keyword-based category detection from text input
   void _detectCategoryFromText(String text) {
     final lower = text.toLowerCase();
     for (final cat in AppConstants.categories) {
@@ -139,7 +161,6 @@ class _ReportScreenState extends State<ReportScreen> {
     }
   }
 
-  /// Submit the issue report
   Future<void> _submitReport() async {
     if (!_formKey.currentState!.validate()) return;
 
@@ -149,7 +170,7 @@ class _ReportScreenState extends State<ReportScreen> {
     }
 
     if (_position == null) {
-      _showError('Location not available. Please enable GPS.');
+      _showError('Location not set. Use GPS or pick on map.');
       return;
     }
 
@@ -182,10 +203,7 @@ class _ReportScreenState extends State<ReportScreen> {
 
   void _showError(String msg) {
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(msg),
-        backgroundColor: AppColors.emergency,
-      ),
+      SnackBar(content: Text(msg), backgroundColor: AppColors.emergency),
     );
   }
 
@@ -195,14 +213,14 @@ class _ReportScreenState extends State<ReportScreen> {
       builder: (_) => AlertDialog(
         title: const Text('✅ Issue Reported!'),
         content: const Text(
-          'Thank you for reporting. The authorities will review your complaint. '
+          'Thank you for reporting. Authorities will review your complaint. '
           'You can track it on the map.',
         ),
         actions: [
           TextButton(
             onPressed: () {
-              Navigator.pop(context); // Close dialog
-              Navigator.pop(context); // Go back to home
+              Navigator.pop(context);
+              Navigator.pop(context);
             },
             child: const Text('OK'),
           ),
@@ -218,7 +236,6 @@ class _ReportScreenState extends State<ReportScreen> {
       appBar: AppBar(
         title: const Text('Report Issue'),
         actions: [
-          // Emergency toggle in appbar
           if (_isEmergency)
             Container(
               margin: const EdgeInsets.only(right: 8),
@@ -241,7 +258,6 @@ class _ReportScreenState extends State<ReportScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // --- Photo Section ---
               _SectionTitle(title: '📷 Photo (Required)'),
               const SizedBox(height: 8),
               _PhotoSection(
@@ -251,18 +267,19 @@ class _ReportScreenState extends State<ReportScreen> {
               ),
               const SizedBox(height: 20),
 
-              // --- Location Section ---
+              // ── LOCATION SECTION (updated) ──
               _SectionTitle(title: '📍 Location'),
               const SizedBox(height: 8),
               _LocationCard(
                 isLoading: _isLoadingLocation,
                 position: _position,
                 address: _address,
-                onRefresh: _getLocation,
+                isManual: _isManualLocation,
+                onRefreshGps: _getLocation,
+                onPickOnMap: _pickLocationOnMap, // ← new
               ),
               const SizedBox(height: 20),
 
-              // --- Category Section ---
               _SectionTitle(title: '🏷️ Category'),
               const SizedBox(height: 8),
               _CategoryGrid(
@@ -271,7 +288,6 @@ class _ReportScreenState extends State<ReportScreen> {
               ),
               const SizedBox(height: 20),
 
-              // --- Description with Voice Input ---
               _SectionTitle(title: '📝 Description'),
               const SizedBox(height: 8),
               Row(
@@ -296,7 +312,6 @@ class _ReportScreenState extends State<ReportScreen> {
                     ),
                   ),
                   const SizedBox(width: 8),
-                  // Voice input button
                   GestureDetector(
                     onTap: _toggleVoice,
                     child: AnimatedContainer(
@@ -320,9 +335,7 @@ class _ReportScreenState extends State<ReportScreen> {
                           Text(
                             _isListening ? 'Stop' : 'Voice',
                             style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 10,
-                            ),
+                                color: Colors.white, fontSize: 10),
                           ),
                         ],
                       ),
@@ -345,7 +358,6 @@ class _ReportScreenState extends State<ReportScreen> {
                 ),
               const SizedBox(height: 20),
 
-              // --- Toggles: Anonymous & Emergency ---
               _ToggleCard(
                 icon: Icons.person_off,
                 title: 'Report Anonymously',
@@ -365,7 +377,6 @@ class _ReportScreenState extends State<ReportScreen> {
               ),
               const SizedBox(height: 24),
 
-              // --- Submit Button ---
               SizedBox(
                 width: double.infinity,
                 height: 54,
@@ -399,7 +410,25 @@ class _ReportScreenState extends State<ReportScreen> {
   }
 }
 
-// --- Helper Widgets ---
+// ── Fake Position subclass to hold manual lat/lng ──
+// Geolocator's Position is not easily constructable, so we extend it minimally.
+class _ManualPosition extends Position {
+  _ManualPosition(double latitude, double longitude)
+      : super(
+          latitude: latitude,
+          longitude: longitude,
+          timestamp: DateTime.now(),
+          accuracy: 0,
+          altitude: 0,
+          altitudeAccuracy: 0,
+          heading: 0,
+          headingAccuracy: 0,
+          speed: 0,
+          speedAccuracy: 0,
+        );
+}
+
+// ── Helper Widgets ──
 
 class _SectionTitle extends StatelessWidget {
   final String title;
@@ -471,16 +500,12 @@ class _PhotoSection extends StatelessWidget {
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 _PhotoButton(
-                  icon: Icons.camera_alt,
-                  label: 'Camera',
-                  onTap: onCamera,
-                ),
+                    icon: Icons.camera_alt, label: 'Camera', onTap: onCamera),
                 const SizedBox(width: 20),
                 _PhotoButton(
-                  icon: Icons.photo_library,
-                  label: 'Gallery',
-                  onTap: onGallery,
-                ),
+                    icon: Icons.photo_library,
+                    label: 'Gallery',
+                    onTap: onGallery),
               ],
             ),
     );
@@ -521,17 +546,22 @@ class _PhotoButton extends StatelessWidget {
   }
 }
 
+/// Updated location card with GPS + Pick on Map buttons
 class _LocationCard extends StatelessWidget {
   final bool isLoading;
   final Position? position;
   final String? address;
-  final VoidCallback onRefresh;
+  final bool isManual;
+  final VoidCallback onRefreshGps;
+  final VoidCallback onPickOnMap;
 
   const _LocationCard({
     required this.isLoading,
     required this.position,
     required this.address,
-    required this.onRefresh,
+    required this.isManual,
+    required this.onRefreshGps,
+    required this.onPickOnMap,
   });
 
   @override
@@ -541,45 +571,105 @@ class _LocationCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: position != null
+              ? (isManual ? AppColors.accent : AppColors.primary)
+              : Colors.grey.shade300,
+        ),
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Icon(Icons.location_on, color: AppColors.emergency, size: 28),
-          const SizedBox(width: 12),
-          Expanded(
-            child: isLoading
-                ? const Text('Getting your location...')
-                : position != null
-                    ? Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            address ?? 'Location detected',
-                            style: const TextStyle(fontWeight: FontWeight.w500),
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
+          Row(
+            children: [
+              Icon(
+                isManual ? Icons.push_pin : Icons.location_on,
+                color: isManual ? AppColors.accent : AppColors.emergency,
+                size: 28,
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: isLoading
+                    ? const Text('Getting your location...')
+                    : position != null
+                        ? Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              // Badge: GPS or Manual
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 6, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: isManual
+                                      ? AppColors.accent.withOpacity(0.1)
+                                      : AppColors.primary.withOpacity(0.1),
+                                  borderRadius: BorderRadius.circular(4),
+                                ),
+                                child: Text(
+                                  isManual ? '📌 Manual Pick' : '📡 GPS',
+                                  style: TextStyle(
+                                    fontSize: 10,
+                                    color: isManual
+                                        ? AppColors.accent
+                                        : AppColors.primary,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                address ?? 'Location detected',
+                                style: const TextStyle(
+                                    fontWeight: FontWeight.w500),
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                              Text(
+                                '${position!.latitude.toStringAsFixed(4)}, '
+                                '${position!.longitude.toStringAsFixed(4)}',
+                                style: const TextStyle(
+                                    color: Colors.grey, fontSize: 12),
+                              ),
+                            ],
+                          )
+                        : const Text(
+                            'Location not set\nUse GPS or pick on map',
+                            style: TextStyle(color: AppColors.warning),
                           ),
-                          Text(
-                            '${position!.latitude.toStringAsFixed(4)}, ${position!.longitude.toStringAsFixed(4)}',
-                            style: const TextStyle(
-                                color: Colors.grey, fontSize: 12),
-                          ),
-                        ],
+              ),
+              // GPS refresh button
+              IconButton(
+                icon: isLoading
+                    ? const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2),
                       )
-                    : const Text(
-                        'Location not available\nPlease enable GPS',
-                        style: TextStyle(color: AppColors.warning),
-                      ),
+                    : const Icon(Icons.gps_fixed, color: AppColors.primary),
+                onPressed: isLoading ? null : onRefreshGps,
+                tooltip: 'Use GPS',
+              ),
+            ],
           ),
-          IconButton(
-            icon: isLoading
-                ? const SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Icon(Icons.refresh, color: AppColors.primary),
-            onPressed: isLoading ? null : onRefresh,
+
+          const SizedBox(height: 10),
+
+          // ── Pick on Map button ──
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              onPressed: onPickOnMap,
+              icon: const Icon(Icons.map, size: 18),
+              label: const Text('Pick Location on Map'),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: AppColors.primary,
+                side: const BorderSide(color: AppColors.primary),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                padding: const EdgeInsets.symmetric(vertical: 10),
+              ),
+            ),
           ),
         ],
       ),

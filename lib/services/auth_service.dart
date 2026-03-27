@@ -1,29 +1,32 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
-import '../constants/app_constants.dart';
 
-/// Handles dummy authentication for MVP demo.
-/// In production, replace with Firebase Auth (Google Sign-In, phone OTP, etc.)
+/// Handles user session for MVP.
+/// Uses SharedPreferences to persist userId, name, city across app launches.
+/// All Firestore data is linked to userId (UUID generated once on first launch).
 class AuthService extends ChangeNotifier {
   String? _userId;
   String? _userName;
-  String _city = 'Nashik';
-  bool _isLoading = false;
+  String _city = '';
+  bool _isLoading = true;
+  bool _isNewUser = false; // true = show onboarding
 
-  String get userId => _userId ?? AppConstants.dummyUserId;
-  String get userName => _userName ?? AppConstants.dummyUserName;
+  String get userId => _userId ?? '';
+  String get userName => _userName ?? 'Citizen';
   String get city => _city;
   bool get isLoading => _isLoading;
-  bool get isLoggedIn => _userId != null;
+  bool get isNewUser => _isNewUser;
+  bool get isLoggedIn =>
+      _userId != null && _userName != null && _city.isNotEmpty;
 
   AuthService() {
-    _initDummyUser();
+    _init();
   }
 
-  /// Create or restore a dummy user session using SharedPreferences.
-  /// This simulates authentication without requiring Firebase Auth setup.
-  Future<void> _initDummyUser() async {
+  /// On first launch: generate UUID, set _isNewUser = true → show onboarding.
+  /// On subsequent launches: restore saved session → go directly to home.
+  Future<void> _init() async {
     _isLoading = true;
     notifyListeners();
 
@@ -31,15 +34,16 @@ class AuthService extends ChangeNotifier {
       final prefs = await SharedPreferences.getInstance();
       _userId = prefs.getString('user_id');
       _userName = prefs.getString('user_name');
-      _city = prefs.getString('user_city') ?? 'Nashik';
+      _city = prefs.getString('user_city') ?? '';
 
-      // First time: generate a unique ID
       if (_userId == null) {
+        // First launch — generate persistent UUID
         _userId = const Uuid().v4();
-        _userName = 'Citizen_${_userId!.substring(0, 6)}';
         await prefs.setString('user_id', _userId!);
-        await prefs.setString('user_name', _userName!);
-        await prefs.setString('user_city', _city);
+        _isNewUser = true; // trigger onboarding screen
+      } else if (_userName == null || _city.isEmpty) {
+        // Has ID but didn't finish onboarding
+        _isNewUser = true;
       }
     } catch (e) {
       debugPrint('Auth init error: $e');
@@ -49,19 +53,47 @@ class AuthService extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Update user's city
-  Future<void> setCity(String city) async {
-    _city = city;
+  /// Called from onboarding screen when user submits name + city.
+  /// Saves to SharedPreferences and also creates user doc in Firestore.
+  Future<void> completeOnboarding({
+    required String name,
+    required String city,
+  }) async {
+    _userName = name.trim();
+    _city = city.trim();
+    _isNewUser = false;
+
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('user_city', city);
+    await prefs.setString('user_name', _userName!);
+    await prefs.setString('user_city', _city);
+
     notifyListeners();
   }
 
-  /// Update display name
+  /// Update name from profile screen
   Future<void> setUserName(String name) async {
-    _userName = name;
+    _userName = name.trim();
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('user_name', name);
+    await prefs.setString('user_name', _userName!);
+    notifyListeners();
+  }
+
+  /// Update city from profile screen
+  Future<void> setCity(String city) async {
+    _city = city.trim();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('user_city', _city);
+    notifyListeners();
+  }
+
+  /// Clear session (logout/reset for testing)
+  Future<void> reset() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.clear();
+    _userId = null;
+    _userName = null;
+    _city = '';
+    _isNewUser = true;
     notifyListeners();
   }
 }

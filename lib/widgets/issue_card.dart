@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
-import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import '../constants/app_colors.dart';
 import '../constants/app_constants.dart';
@@ -11,10 +10,9 @@ import '../services/user_service.dart';
 import '../widgets/issue_detail_sheet.dart';
 
 /// Reusable card widget for displaying a civic issue.
-/// Shows image, category, status, votes, and vote button.
 class IssueCard extends StatelessWidget {
   final IssueModel issue;
-  final bool compact; // compact = horizontal list style
+  final bool compact;
 
   const IssueCard({super.key, required this.issue, this.compact = false});
 
@@ -62,112 +60,117 @@ class IssueCard extends StatelessWidget {
         onTap: () => _showDetail(context),
         child: Padding(
           padding: const EdgeInsets.all(12),
-          child: Row(
+          child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Issue thumbnail
-              _IssueThumbnail(imageUrl: issue.imageUrl, size: 80),
-              const SizedBox(width: 12),
+              // TOP ROW: image + info
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Thumbnail
+                  _IssueThumbnail(imageUrl: issue.imageUrl, size: 75),
+                  const SizedBox(width: 12),
 
-              // Issue info
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // Category + Emergency badge
-                    Row(
+                  // Info column
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text('$_categoryIcon ',
-                            style: const TextStyle(fontSize: 16)),
-                        Text(
-                          issue.category.toUpperCase(),
-                          style: const TextStyle(
-                            fontWeight: FontWeight.bold,
-                            fontSize: 13,
-                          ),
+                        // Category + Emergency badge
+                        Row(
+                          children: [
+                            Text('$_categoryIcon ',
+                                style: const TextStyle(fontSize: 15)),
+                            Expanded(
+                              child: Text(
+                                issue.category.toUpperCase(),
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 13,
+                                ),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                            if (issue.isEmergency)
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 5, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: AppColors.emergency,
+                                  borderRadius: BorderRadius.circular(4),
+                                ),
+                                child: const Text('🚨',
+                                    style: TextStyle(fontSize: 10)),
+                              ),
+                          ],
                         ),
-                        const Spacer(),
-                        if (issue.isEmergency)
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 6, vertical: 2),
-                            decoration: BoxDecoration(
-                              color: AppColors.emergency,
-                              borderRadius: BorderRadius.circular(4),
-                            ),
-                            child: const Text(
-                              '🚨',
-                              style: TextStyle(fontSize: 10),
-                            ),
-                          ),
-                      ],
-                    ),
-                    const SizedBox(height: 4),
+                        const SizedBox(height: 4),
 
-                    // Description
-                    Text(
-                      issue.description.isEmpty
-                          ? 'No description'
-                          : issue.description,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                          fontSize: 13, color: AppColors.textSecondary),
-                    ),
-                    const SizedBox(height: 6),
-
-                    // Footer: status + votes + reporter
-                    Row(
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 6, vertical: 2),
-                          decoration: BoxDecoration(
-                            color: _statusColor.withOpacity(0.15),
-                            borderRadius: BorderRadius.circular(4),
-                          ),
-                          child: Text(
-                            _statusLabel,
-                            style: TextStyle(
-                              color: _statusColor,
-                              fontSize: 10,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 6),
-                        Icon(Icons.thumb_up,
-                            size: 12, color: AppColors.primary),
-                        const SizedBox(width: 2),
+                        // Description
                         Text(
-                          '${issue.voteCount}',
+                          issue.description.isEmpty
+                              ? 'No description'
+                              : issue.description,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
                           style: const TextStyle(
-                              fontSize: 12, color: AppColors.primary),
+                              fontSize: 12, color: AppColors.textSecondary),
                         ),
-                        const Spacer(),
-                        // Reporter name
+                        const SizedBox(height: 6),
+
+                        // Location + time
                         Text(
-                          issue.isAnonymous
-                              ? '🕵️ Anonymous'
-                              : (issue.userName ?? 'Unknown'),
+                          '📍 ${issue.city}  •  ${_timeAgo(issue.createdAt)}',
                           style:
                               const TextStyle(fontSize: 11, color: Colors.grey),
                         ),
                       ],
                     ),
-                    const SizedBox(height: 4),
-
-                    // Location + time
-                    Text(
-                      '📍 ${issue.city}  •  ${_timeAgo(issue.createdAt)}',
-                      style: const TextStyle(fontSize: 11, color: Colors.grey),
-                    ),
-                  ],
-                ),
+                  ),
+                ],
               ),
 
-              // Vote button
-              _VoteButton(issue: issue),
+              const SizedBox(height: 10),
+              const Divider(height: 1),
+              const SizedBox(height: 8),
+
+              // BOTTOM ROW: status + reporter + vote button
+              Row(
+                children: [
+                  // Status chip
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: _statusColor.withOpacity(0.15),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Text(
+                      _statusLabel,
+                      style: TextStyle(
+                        color: _statusColor,
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+
+                  // Reporter
+                  Expanded(
+                    child: Text(
+                      issue.isAnonymous
+                          ? '🕵️ Anonymous'
+                          : (issue.userName ?? 'Unknown'),
+                      style: const TextStyle(fontSize: 11, color: Colors.grey),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+
+                  // ✅ VOTE BUTTON — always visible in bottom row
+                  _VoteButton(issue: issue),
+                ],
+              ),
             ],
           ),
         ),
@@ -182,11 +185,10 @@ class IssueCard extends StatelessWidget {
         borderRadius: BorderRadius.circular(12),
         onTap: () => _showDetail(context),
         child: SizedBox(
-          width: 240,
+          width: 200,
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Image
               ClipRRect(
                 borderRadius:
                     const BorderRadius.vertical(top: Radius.circular(12)),
@@ -201,21 +203,23 @@ class IssueCard extends StatelessWidget {
                     Row(
                       children: [
                         Text('$_categoryIcon ',
-                            style: const TextStyle(fontSize: 14)),
-                        Text(
-                          issue.category.toUpperCase(),
-                          style: const TextStyle(
-                              fontWeight: FontWeight.bold, fontSize: 12),
+                            style: const TextStyle(fontSize: 13)),
+                        Expanded(
+                          child: Text(
+                            issue.category.toUpperCase(),
+                            style: const TextStyle(
+                                fontWeight: FontWeight.bold, fontSize: 11),
+                            overflow: TextOverflow.ellipsis,
+                          ),
                         ),
-                        const Spacer(),
                         if (issue.isEmergency)
-                          const Text('🚨', style: TextStyle(fontSize: 12)),
+                          const Text('🚨', style: TextStyle(fontSize: 11)),
                       ],
                     ),
                     const SizedBox(height: 2),
                     Text(
                       '📍 ${issue.city}',
-                      style: const TextStyle(fontSize: 11, color: Colors.grey),
+                      style: const TextStyle(fontSize: 10, color: Colors.grey),
                     ),
                   ],
                 ),
@@ -246,7 +250,7 @@ class IssueCard extends StatelessWidget {
   }
 }
 
-/// Thumbnail image widget with fallback
+/// Thumbnail — handles both Cloudinary URLs and missing images
 class _IssueThumbnail extends StatelessWidget {
   final String? imageUrl;
   final double size;
@@ -258,11 +262,16 @@ class _IssueThumbnail extends StatelessWidget {
     this.fullWidth = false,
   });
 
+  bool get _isNetworkUrl =>
+      imageUrl != null &&
+      (imageUrl!.startsWith('http://') || imageUrl!.startsWith('https://'));
+
   @override
   Widget build(BuildContext context) {
     Widget image;
 
-    if (imageUrl != null && imageUrl!.isNotEmpty) {
+    if (_isNetworkUrl) {
+      // Cloudinary / remote URL
       image = CachedNetworkImage(
         imageUrl: imageUrl!,
         fit: BoxFit.cover,
@@ -273,6 +282,7 @@ class _IssueThumbnail extends StatelessWidget {
         errorWidget: (_, __, ___) => _placeholder(),
       );
     } else {
+      // No image or local path (fallback)
       image = _placeholder();
     }
 
@@ -292,16 +302,16 @@ class _IssueThumbnail extends StatelessWidget {
       child: const Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(Icons.image_not_supported, color: Colors.grey),
+          Icon(Icons.image_not_supported, color: Colors.grey, size: 20),
           SizedBox(height: 4),
-          Text('No Image', style: TextStyle(fontSize: 10, color: Colors.grey)),
+          Text('No Image', style: TextStyle(fontSize: 9, color: Colors.grey)),
         ],
       ),
     );
   }
 }
 
-/// Thumbs-up vote button with trust-weighted voting
+/// Thumbs-up vote button — shown in bottom row, always visible
 class _VoteButton extends StatefulWidget {
   final IssueModel issue;
   const _VoteButton({required this.issue});
@@ -316,7 +326,6 @@ class _VoteButtonState extends State<_VoteButton> {
 
   Future<void> _vote() async {
     if (_voted || _loading) return;
-
     setState(() => _loading = true);
 
     final auth = context.read<AuthService>();
@@ -329,64 +338,65 @@ class _VoteButtonState extends State<_VoteButton> {
       trustScore: userService.trustScore,
     );
 
-    if (success) {
-      setState(() => _voted = true);
+    if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('✅ Vote submitted! Priority updated.'),
-          backgroundColor: AppColors.success,
-          duration: Duration(seconds: 2),
+        SnackBar(
+          content: Text(success
+              ? '✅ Vote submitted!'
+              : 'You already voted on this issue.'),
+          backgroundColor: success ? AppColors.success : Colors.grey,
+          duration: const Duration(seconds: 2),
         ),
       );
-    } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('You already voted on this issue.'),
-          duration: Duration(seconds: 2),
-        ),
-      );
+      setState(() {
+        if (success) _voted = true;
+        _loading = false;
+      });
     }
-
-    setState(() => _loading = false);
   }
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      children: [
-        GestureDetector(
-          onTap: _vote,
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 200),
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: _voted
-                  ? AppColors.primary.withOpacity(0.15)
-                  : Colors.grey.shade100,
-              shape: BoxShape.circle,
-            ),
-            child: _loading
+    return GestureDetector(
+      onTap: _vote,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          color: _voted
+              ? AppColors.primary.withOpacity(0.15)
+              : Colors.grey.shade100,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: _voted ? AppColors.primary : Colors.grey.shade300,
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _loading
                 ? const SizedBox(
-                    width: 20,
-                    height: 20,
+                    width: 14,
+                    height: 14,
                     child: CircularProgressIndicator(strokeWidth: 2),
                   )
                 : Icon(
                     _voted ? Icons.thumb_up : Icons.thumb_up_outlined,
                     color: _voted ? AppColors.primary : Colors.grey,
-                    size: 20,
+                    size: 14,
                   ),
-          ),
+            const SizedBox(width: 4),
+            Text(
+              '${widget.issue.voteCount + (_voted ? 1 : 0)}',
+              style: TextStyle(
+                fontSize: 12,
+                color: _voted ? AppColors.primary : Colors.grey,
+                fontWeight: _voted ? FontWeight.bold : FontWeight.normal,
+              ),
+            ),
+          ],
         ),
-        Text(
-          '${widget.issue.voteCount + (_voted ? 1 : 0)}',
-          style: TextStyle(
-            fontSize: 11,
-            color: _voted ? AppColors.primary : Colors.grey,
-            fontWeight: _voted ? FontWeight.bold : FontWeight.normal,
-          ),
-        ),
-      ],
+      ),
     );
   }
 }

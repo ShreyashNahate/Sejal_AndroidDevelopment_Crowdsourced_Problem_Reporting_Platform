@@ -5,6 +5,9 @@ import 'package:uuid/uuid.dart';
 import '../models/issue_model.dart';
 import '../models/vote_model.dart';
 import '../constants/app_constants.dart';
+// Add this import at the top of issue_service.dart
+import 'dart:convert';
+import 'package:http/http.dart' as http;
 
 /// Service for all issue-related Firebase operations.
 /// Handles: create, read, vote, priority calculation, duplicate detection.
@@ -60,13 +63,40 @@ class IssueService extends ChangeNotifier {
             .toList());
   }
 
-  /// Upload image to Firebase Storage and return download URL
+  /// Upload image to Cloudinary (free tier) and return the secure URL.
+  /// Cloudinary free tier: 25GB storage + 25GB bandwidth/month.
+  /// Setup: cloudinary.com → Settings → Upload Presets → create unsigned preset
   Future<String?> uploadImage(File imageFile) async {
     try {
-      // For hackathon: just return local file path
-      return imageFile.path;
+      // 🔧 REPLACE these two values with yours from Cloudinary dashboard
+      const cloudName = 'dqbsprma5'; // e.g. 'dxyz123abc'
+      const uploadPreset = 'SmartCity'; // e.g. 'smartcity_unsigned'
+
+      final url = Uri.parse(
+        'https://api.cloudinary.com/v1_1/$cloudName/image/upload',
+      );
+
+      // Multipart POST request — no API key needed for unsigned preset
+      final request = http.MultipartRequest('POST', url)
+        ..fields['upload_preset'] = uploadPreset
+        ..fields['folder'] = 'smartcity_issues' // organizes uploads in a folder
+        ..files.add(
+          await http.MultipartFile.fromPath('file', imageFile.path),
+        );
+
+      final response = await request.send();
+
+      if (response.statusCode == 200) {
+        final body = await response.stream.bytesToString();
+        final json = jsonDecode(body) as Map<String, dynamic>;
+        // Returns HTTPS URL — store this in Firestore
+        return json['secure_url'] as String?;
+      } else {
+        debugPrint('Cloudinary upload failed: ${response.statusCode}');
+        return null;
+      }
     } catch (e) {
-      debugPrint('Image error: $e');
+      debugPrint('Image upload error: $e');
       return null;
     }
   }

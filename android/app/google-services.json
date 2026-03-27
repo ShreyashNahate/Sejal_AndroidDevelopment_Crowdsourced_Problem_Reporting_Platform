@@ -1,6 +1,7 @@
 {
   "project_info": {
     "project_number": "363011610332",
+    "firebase_url": "https://smartcity-dbf79-default-rtdb.firebaseio.com",
     "project_id": "smartcity-dbf79",
     "storage_bucket": "smartcity-dbf79.firebasestorage.app"
   },
