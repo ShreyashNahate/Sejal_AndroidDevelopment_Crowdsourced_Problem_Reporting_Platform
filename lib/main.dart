@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:provider/provider.dart';
 import 'package:google_fonts/google_fonts.dart';
-
+import 'screens/community/community_chat_screen.dart';
 import 'constants/app_colors.dart';
 import 'firebase_options.dart';
 import 'services/auth_service.dart';
@@ -51,6 +51,7 @@ class SmartCityApp extends StatelessWidget {
           '/admin': (ctx) => const AdminScreen(),
           '/emergency': (ctx) => const EmergencyScreen(),
           '/profile': (ctx) => const ProfileScreen(),
+          '/community': (_) => const CommunityChatScreen(),
         },
       ),
     );

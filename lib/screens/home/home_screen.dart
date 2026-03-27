@@ -60,6 +60,7 @@ class _HomeScreenState extends State<HomeScreen> {
         return _navigateTo('/chatbot');
       case 3:
         return _navigateTo('/leaderboard');
+
       default:
         return _HomeTab();
     }
@@ -86,6 +87,8 @@ class _HomeScreenState extends State<HomeScreen> {
           Navigator.pushNamed(context, '/chatbot');
         } else if (index == 3) {
           Navigator.pushNamed(context, '/leaderboard');
+        } else if (index == 4) {
+          Navigator.pushNamed(context, '/community');
         }
       },
       destinations: const [
@@ -93,6 +96,7 @@ class _HomeScreenState extends State<HomeScreen> {
         NavigationDestination(icon: Icon(Icons.map), label: 'Map'),
         NavigationDestination(icon: Icon(Icons.chat_bubble), label: 'Chatbot'),
         NavigationDestination(icon: Icon(Icons.leaderboard), label: 'Ranks'),
+        NavigationDestination(icon: Icon(Icons.forum), label: 'Community'),
       ],
     );
   }
@@ -110,6 +114,7 @@ class _HomeTab extends StatelessWidget {
       appBar: AppBar(
         title: const Text('🏙️ SmartCity'),
         actions: [
+          // profile button in top bar
           IconButton(
             icon: const Icon(Icons.account_circle),
             onPressed: () => Navigator.pushNamed(context, '/profile'),
